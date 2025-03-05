@@ -3,7 +3,6 @@ import axios from 'axios';
 import { CardBrand, Transaction, TransactionMode, TransactionType, Currency } from '@/utils/helpers';
 
 interface TransactionState {
-  // Campos de la transacción
   tipo: TransactionType;
   marca: CardBrand;
   modalidad: TransactionMode;
@@ -14,20 +13,17 @@ interface TransactionState {
   plazo: number | undefined;
   recurrente: boolean;
   frecuenciaDias: number | undefined;
-  
-  // Estados de la interfaz
+  cvv: string;
+  fechaExpiracion: string;
   isLoading: boolean;
   error: string | null;
   success: boolean;
   
-  // Acciones
   setField: <K extends keyof Transaction>(field: K, value: Transaction[K]) => void;
   resetForm: () => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   setSuccess: (success: boolean) => void;
-  
-  // Para procesamiento de transacción
   processTransaction: () => Promise<void>;
 }
 
@@ -39,16 +35,16 @@ const initialState: Omit<TransactionState, 'setField' | 'resetForm' | 'setLoadin
   moneda: 'USD',
   numeroTarjeta: '',
   nombreTitular: '',
-  plazo: undefined,
+  plazo: 3,
   recurrente: false,
-  frecuenciaDias: undefined,
+  frecuenciaDias: 30,
+  cvv: '',
+  fechaExpiracion: '',
   isLoading: false,
   error: null,
   success: false
 };
-
-// URL base de la API de Spring
-const API_URL = 'http://localhost:8080/v1/transacciones';
+const API_URL = 'http://pos-alb-1760670904.us-east-2.elb.amazonaws.com/api/v1/transacciones';
 
 export const useTransactionStore = create<TransactionState>((set, get) => ({
   ...initialState,
@@ -66,6 +62,8 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     plazo: initialState.plazo,
     recurrente: initialState.recurrente,
     frecuenciaDias: initialState.frecuenciaDias,
+    cvv: initialState.cvv,
+    fechaExpiracion: initialState.fechaExpiracion,
     isLoading: initialState.isLoading,
     error: initialState.error,
     success: initialState.success
@@ -78,18 +76,22 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   setSuccess: (success) => set({ success }),
   
   processTransaction: async () => {
-    const state = get();
-    
     try {
+      const state = get();
       set({ isLoading: true, error: null, success: false });
       
-      let backendModalidad = 'SIM';
+      // Detectar la modalidad basada en las selecciones del usuario
+      let backendModalidad;
       if (state.modalidad === 'REC') {
         backendModalidad = 'REC';
+      } else if (state.modalidad === 'DIF') {
+        // Para transacciones diferidas, usamos "DIF" para el backend
+        backendModalidad = 'DIF';
       } else {
         backendModalidad = 'SIM';
       }
       
+      // Datos básicos de la transacción
       const transactionData: any = {
         tipo: 'PAG',
         marca: state.marca === 'unknown' ? 'VISA' : state.marca,
@@ -97,16 +99,26 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
         monto: state.monto,
         moneda: state.moneda,
         numeroTarjeta: state.numeroTarjeta.replace(/\D/g, ''),
-        nombreTitular: state.nombreTitular
+        nombreTitular: state.nombreTitular,
+        // Asegurar que el CVV tenga 3 dígitos
+        cvv: state.cvv && state.cvv.length >= 3 ? state.cvv : state.cvv.padStart(3, '0'),
+        fechaExpiracion: state.fechaExpiracion,
+        // Agregar detalle para la referencia
+        detalle: 'Compra realizada desde Terminal POS',
       };
       
-      if (state.modalidad === 'DIF' && state.plazo) {
-        transactionData.plazo = state.plazo;
-      }
-      
-      if (state.modalidad === 'REC') {
+      // Configurar campos específicos según la modalidad frontend
+      if (state.modalidad === 'DIF') {
+        // Para pagos diferidos - asegurar que siempre tenga un plazo válido
+        transactionData.plazo = state.plazo || 3; // Usar valor por defecto si no está definido
+        console.log('Transacción diferida con plazo:', transactionData.plazo);
+      } else if (backendModalidad === 'REC') {
+        // Para pagos recurrentes
         transactionData.recurrente = true;
         transactionData.frecuenciaDias = state.frecuenciaDias || 30;
+      } else {
+        // Para pagos simples
+        transactionData.recurrente = false;
       }
       
       console.log('Enviando datos de transacción:', transactionData);
@@ -115,54 +127,32 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
       
       console.log('Respuesta exitosa:', response);
       
-      set({ success: true, isLoading: false });
+      // Si llegamos aquí, la transacción fue aprobada (código 200)
+      set({ 
+        success: true, 
+        isLoading: false,
+        error: null
+      });
       
       setTimeout(() => {
         set({ success: false });
         get().resetForm();
       }, 2000);
-      
     } catch (error) {
       console.error('Error al procesar la transacción:', error);
       
-      let errorMessage = 'Error desconocido al procesar la transacción';
+      // Simplificar el mensaje de error para la interfaz de usuario
+      set({ 
+        error: "Pago rechazado", 
+        isLoading: false,
+        success: false
+      });
       
-      if (axios.isAxiosError(error)) {
-        if (error.code === 'ERR_NETWORK' || error.code === 'ECONNREFUSED' || error.message.includes('Network Error')) {
-          errorMessage = 'No se pudo conectar con el servidor. Verifique que el servicio esté en ejecución.';
-        } else if (error.response) {
-          if (error.response.status === 400) {
-            if (error.response.data && typeof error.response.data === 'string' && error.response.data.includes('Validation failed')) {
-              errorMessage = 'Datos inválidos: verifique número de tarjeta (16 dígitos) y datos del titular';
-            } else {
-              errorMessage = 'Datos inválidos para la transacción';
-            }
-          } else if (error.response.status === 404) {
-            errorMessage = 'Terminal POS no encontrado';
-          } else if (error.response.status === 500) {
-            errorMessage = 'Error de comunicación con el Payment Gateway';
-          }
-          
-          if (typeof error.response.data === 'string') {
-            errorMessage = error.response.data;
-          } else if (error.response.data && error.response.data.message) {
-            errorMessage = error.response.data.message;
-          }
-        } else {
-          errorMessage = error.message;
-        }
-      } else if (error instanceof Error) {
-        errorMessage = error.message;
-      }
-      
-      console.log('Estableciendo error:', errorMessage);
-      
-      set({ error: errorMessage, isLoading: false, success: false });
-      
+      // Limpiar el error y resetear el formulario después de un tiempo
       setTimeout(() => {
         set({ error: null });
         get().resetForm();
-      }, 5000);
+      }, 3000);
     }
   }
 })); 

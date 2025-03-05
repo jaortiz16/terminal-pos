@@ -25,9 +25,7 @@ export const CardForm = ({ onSubmit }: CardFormProps) => {
   const [cvv, setCvv] = useState('');
   const [expiryError, setExpiryError] = useState('');
 
-  // Limpiar campos locales cuando el store se resetea
   useEffect(() => {
-    // Si el numeroTarjeta y nombreTitular del store están vacíos, es un reset
     if (store.numeroTarjeta === '' && store.nombreTitular === '') {
       setCardNumber('');
       setExpiryDate('');
@@ -36,21 +34,34 @@ export const CardForm = ({ onSubmit }: CardFormProps) => {
     }
   }, [store.numeroTarjeta, store.nombreTitular]);
 
-  // Detectar la marca de la tarjeta al cambiar el número
+  useEffect(() => {
+    if (!store.error && !store.success && !store.isLoading && 
+        store.numeroTarjeta === '' && store.nombreTitular === '') {
+      setCardNumber('');
+      setExpiryDate('');
+      setCvv('');
+      setExpiryError('');
+    }
+  }, [store.error, store.success, store.isLoading, store.numeroTarjeta, store.nombreTitular]);
+
   useEffect(() => {
     if (cardNumber) {
       const brand = detectCardBrand(cardNumber);
       const cleanCardNumber = cardNumber.replace(/\s/g, '');
-      // Usar setter para actualizar valores sin crear dependencia circular
       store.setField('marca', brand);
       store.setField('numeroTarjeta', cleanCardNumber);
     } else {
-      // Si el número de tarjeta está vacío, reiniciar la marca
       store.setField('marca', 'unknown');
     }
-  }, [cardNumber]);  // Quitado 'store' de las dependencias para evitar bucle
+  }, [cardNumber]); 
 
-  // Manejar el cambio del número de tarjeta
+  useEffect(() => {
+    if (store.modalidad === 'DIF' && !store.plazo) {
+      store.setField('plazo', 3);
+      console.log('Estableciendo plazo por defecto en useEffect:', 3);
+    }
+  }, [store.modalidad]);
+
   const handleCardNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value.replace(/\D/g, '');
     if (value.length <= 16) {
@@ -58,22 +69,22 @@ export const CardForm = ({ onSubmit }: CardFormProps) => {
     }
   };
 
-  // Manejar el cambio de la fecha de vencimiento
   const handleExpiryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value.replace(/[^\d/]/g, '');
-    setExpiryDate(formatExpiryDate(value));
-    validateExpiryDate(formatExpiryDate(value));
+    const formatted = formatExpiryDate(value);
+    setExpiryDate(formatted);
+    validateExpiryDate(formatted);
+    store.setField('fechaExpiracion', formatted);
   };
 
-  // Validar que la fecha de caducidad sea mayor a la fecha actual
   const validateExpiryDate = (date: string) => {
-    if (date.length === 5) { // Formato MM/YY completo
+    if (date.length === 5) { 
       const [month, year] = date.split('/');
       const expiryMonth = parseInt(month, 10);
       const expiryYear = parseInt('20' + year, 10);
       
       const currentDate = new Date();
-      const currentMonth = currentDate.getMonth() + 1; // getMonth() devuelve 0-11
+      const currentMonth = currentDate.getMonth() + 1; 
       const currentYear = currentDate.getFullYear();
       
       if (expiryYear < currentYear || (expiryYear === currentYear && expiryMonth < currentMonth)) {
@@ -84,26 +95,38 @@ export const CardForm = ({ onSubmit }: CardFormProps) => {
     }
   };
 
-  // Manejar cambio de modalidad de pago
   const handleModeChange = (value: string) => {
-    // Mapear los valores de UI a los valores que espera el backend
     if (value === 'COR') {
-      store.setField('modalidad', 'SIM'); // COR -> SIM en el backend
-    } else {
-      store.setField('modalidad', value as any);
+      store.setField('modalidad', 'SIM');
+      store.setField('plazo', undefined);
+      store.setField('frecuenciaDias', undefined);
+    } else if (value === 'DIF') {
+      store.setField('modalidad', 'DIF');
+      store.setField('plazo', 3);
+      console.log('Estableciendo plazo por defecto en handleModeChange:', 3);
+      store.setField('frecuenciaDias', undefined);
+    } else if (value === 'REC') {
+      store.setField('modalidad', 'REC');
+      store.setField('frecuenciaDias', 30);
+      store.setField('plazo', undefined);
     }
   };
 
-  // Manejar cambio de CVV
   const handleCvvChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value.replace(/\D/g, '');
-    if (value.length <= 3) { // Limitado a 3 dígitos
+    if (value.length <= 3) { 
       setCvv(value);
+      store.setField('cvv', value);
     }
   };
 
-  // Manejar el proceso de pago con validaciones
   const handleSubmit = () => {
+    if (cvv.length < 3) {
+      const paddedCvv = cvv.padStart(3, '0');
+      setCvv(paddedCvv);
+      store.setField('cvv', paddedCvv);
+    }
+
     if (onSubmit) {
       onSubmit();
     } else {
@@ -111,16 +134,24 @@ export const CardForm = ({ onSubmit }: CardFormProps) => {
     }
   };
 
+  useEffect(() => {
+    if (store.modalidad === 'DIF') {
+      if (!store.plazo || store.plazo <= 0) {
+        console.log("Estableciendo plazo por defecto: 3 meses");
+        store.setField('plazo', 3);
+      }
+    }
+  }, [store.modalidad]);
+
   return (
     <div className="w-full max-w-md space-y-6">
       <div className="space-y-5">
-        {/* Título del formulario */}
+    
         <div className="flex items-center space-x-2">
           <CreditCard className="h-5 w-5" />
           <h2 className="text-xl font-medium">Detalles de pago</h2>
         </div>
         
-        {/* Nombre del propietario */}
         <div className="space-y-2">
           <Label htmlFor="nombreTitular" className="text-sm">Nombre propietario</Label>
           <Input
@@ -132,7 +163,6 @@ export const CardForm = ({ onSubmit }: CardFormProps) => {
           />
         </div>
 
-        {/* Número de tarjeta con detección de marca */}
         <div className="space-y-2">
           <Label htmlFor="numeroTarjeta" className="text-sm">N# tarjeta</Label>
           <div className="relative">
@@ -149,7 +179,6 @@ export const CardForm = ({ onSubmit }: CardFormProps) => {
           </div>
         </div>
 
-        {/* Fecha y CVV en fila */}
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="fechaCaducidad" className="text-sm">Fecha caducidad</Label>
@@ -180,7 +209,6 @@ export const CardForm = ({ onSubmit }: CardFormProps) => {
           </div>
         </div>
 
-        {/* Modalidad de pago con tabs */}
         <div className="pt-2">
           <Tabs defaultValue="COR" onValueChange={handleModeChange} className="w-full">
             <TabsList className="grid grid-cols-3 w-full bg-gray-100 dark:bg-black">
@@ -197,19 +225,16 @@ export const CardForm = ({ onSubmit }: CardFormProps) => {
             
             <TabsContent value="DIF">
               <div className="py-2 space-y-3">
-                <div className="flex items-center space-x-2">
-                  <Checkbox 
-                    id="diferido" 
-                    checked 
-                  />
-                  <Label htmlFor="diferido" className="text-sm font-normal">Diferido</Label>
-                </div>
-                
                 <div className="space-y-2">
                   <Label htmlFor="plazo" className="text-sm">Cuotas</Label>
                   <Select 
-                    onValueChange={(value) => store.setField('plazo', parseInt(value))} 
+                    onValueChange={(value) => {
+                      const plazo = parseInt(value, 10);
+                      store.setField('plazo', plazo);
+                      console.log('Plazo seleccionado:', plazo);
+                    }} 
                     defaultValue="3"
+                    value={store.plazo?.toString() || "3"}
                   >
                     <SelectTrigger className="border-gray-300 dark:border-gray-700 bg-transparent">
                       <SelectValue placeholder="Seleccione plazo" />
@@ -253,24 +278,21 @@ export const CardForm = ({ onSubmit }: CardFormProps) => {
           </Tabs>
         </div>
 
-        {/* Botón de procesamiento */}
         <Button 
-          className="w-full mt-4 bg-black hover:bg-gray-800 dark:bg-white dark:text-black dark:hover:bg-gray-200"
-          disabled={
-            store.isLoading || 
-            !store.nombreTitular || 
-            !cardNumber || 
-            !expiryDate || 
-            !cvv || 
-            !!expiryError || 
-            store.monto <= 0
-          }
+          className="w-full bg-black text-white dark:bg-white dark:text-black mt-6 h-12"
           onClick={handleSubmit}
+          disabled={store.isLoading || !cardNumber || !store.nombreTitular || (expiryError ? true : false)}
         >
-          Procesar Pago
+          {store.isLoading ? (
+            <div className="flex items-center">
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              <span>Procesando...</span>
+            </div>
+          ) : (
+            <span>Procesar transacción</span>
+          )}
         </Button>
 
-        {/* Botón de cancelar */}
         <Button 
           variant="outline"
           className="w-full border-gray-300 dark:border-gray-700"

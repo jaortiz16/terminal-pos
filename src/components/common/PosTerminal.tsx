@@ -30,8 +30,7 @@ export const PosTerminal = () => {
   const store = useTransactionStore();
   const [error, setError] = useState('');
   const [configOpen, setConfigOpen] = useState(false);
-  
-  // Datos de configuración del terminal (simulados)
+
   const [configData, setConfigData] = useState<ConfiguracionPOS>({
     modelo: "POS-2024",
     codigoPOS: "TRM-00123",
@@ -40,14 +39,12 @@ export const PosTerminal = () => {
     fechaActivacion: new Date().toISOString().split('T')[0]
   });
 
-  // Cargar la configuración del POS desde el endpoint
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const response = await axios.get('http://localhost:8080/v1/configuracion');
+        const response = await axios.get('http://pos-alb-1760670904.us-east-2.elb.amazonaws.com/api/v1/configuracion');
         const data = response.data;
         
-        // Adaptar los nombres de propiedades a nuestro formato
         setConfigData({
           modelo: data.modelo,
           codigoPOS: data.codigoPos,
@@ -63,20 +60,24 @@ export const PosTerminal = () => {
     fetchConfig();
   }, []);
 
-  // Limpiar el campo de monto cuando se reinicie el formulario
   useEffect(() => {
-    // Cuando ambos campos estén vacíos, asumimos que es un reset del formulario
     if (store.numeroTarjeta === '' && store.nombreTitular === '' && store.monto === 0) {
       setAmount('');
       setError('');
     }
   }, [store.numeroTarjeta, store.nombreTitular, store.monto]);
 
+  // Efecto adicional para limpiar el formulario cuando cambia el estado de error o éxito
+  useEffect(() => {
+    if (!store.error && !store.success && !store.isLoading) {
+      setAmount('');
+      setError('');
+    }
+  }, [store.error, store.success, store.isLoading]);
+
   const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Permitir solo números y un punto decimal
     const value = e.target.value.replace(/[^\d.]/g, '');
     
-    // Validar que solo haya un punto decimal
     const parts = value.split('.');
     if (parts.length > 2) return;
     if (parts[1] && parts[1].length > 2) return;
@@ -84,7 +85,6 @@ export const PosTerminal = () => {
     setAmount(value);
     setError('');
     
-    // Actualizar el monto en el store si es un número válido
     const parsedAmount = parseFloat(value);
     if (!isNaN(parsedAmount)) {
       store.setField('monto', parsedAmount);
@@ -93,27 +93,44 @@ export const PosTerminal = () => {
     }
   };
 
-  const handleProcessTransaction = () => {
-    // Validaciones adicionales antes de procesar
+  const handleSubmit = () => {
     if (store.monto <= 0) {
       setError('El monto debe ser mayor a 0');
       return;
     }
     
+    // Validar que las transacciones diferidas tengan un plazo válido
+    if (store.modalidad === 'DIF' && (!store.plazo || store.plazo <= 0)) {
+      console.log('Estableciendo plazo por defecto antes de procesar:', 3);
+      store.setField('plazo', 3);
+    }
+    
+    if (store.modalidad === 'REC' && (!store.frecuenciaDias || store.frecuenciaDias <= 0)) {
+      store.setField('frecuenciaDias', 30);
+      console.log('Se estableció una frecuencia por defecto de 30 días para la transacción recurrente');
+    }
+    
+    if (!store.cvv || store.cvv.length < 3) {
+      setError('El CVV debe tener al menos 3 dígitos');
+      return;
+    }
+    
     console.log('Iniciando procesamiento de transacción');
     console.log('Estado actual:', {
+      modalidad: store.modalidad,
       monto: store.monto,
       moneda: store.moneda,
+      plazo: store.plazo,
+      frecuenciaDias: store.frecuenciaDias,
       isLoading: store.isLoading,
       error: store.error,
       success: store.success
     });
     
-    // Si pasa todas las validaciones, procesa la transacción
+    // Procesar la transacción
     store.processTransaction();
   };
 
-  // Log de estado para depuración
   useEffect(() => {
     console.log('Estado actualizado:', {
       isLoading: store.isLoading,
@@ -124,7 +141,7 @@ export const PosTerminal = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-black text-gray-900 dark:text-gray-100 p-4">
-      {/* Terminal físico */}
+
       <motion.div 
         initial={{ scale: 0.95, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
@@ -136,7 +153,6 @@ export const PosTerminal = () => {
           boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)'
         }}
       >
-        {/* Overlay para estados de procesamiento */}
         <AnimatePresence>
           {store.isLoading && (
             <motion.div
@@ -179,6 +195,9 @@ export const PosTerminal = () => {
                   <Check className="h-12 w-12 text-white" />
                 </motion.div>
                 <p className="text-xl font-medium">¡Pago aprobado!</p>
+                {store.modalidad === 'DIF' && store.plazo && (
+                  <p className="text-sm mt-2">Diferido a {store.plazo} meses</p>
+                )}
               </motion.div>
             </motion.div>
           )}
@@ -202,20 +221,14 @@ export const PosTerminal = () => {
                   transition={{ type: "spring", stiffness: 200, damping: 10 }}
                   className="bg-red-500 rounded-full p-3 mb-4"
                 >
-                  {store.error.includes('conectar') ? (
-                    <Wifi className="h-12 w-12 text-white" />
-                  ) : (
-                    <X className="h-12 w-12 text-white" />
-                  )}
+                  <X className="h-12 w-12 text-white" />
                 </motion.div>
                 <p className="text-xl font-medium">Pago rechazado</p>
-                <p className="text-sm mt-2 max-w-xs">{store.error}</p>
               </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* Terminal Header */}
         <div className="bg-black dark:bg-black p-4 text-white flex justify-between items-center">
           <div className="flex items-center space-x-2">
             <CreditCard className="h-5 w-5" />
@@ -232,7 +245,6 @@ export const PosTerminal = () => {
           </div>
         </div>
 
-        {/* Terminal Screen */}
         <div className="p-5 space-y-6">
           {/* Entrada de monto */}
           <div className="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg">
@@ -257,7 +269,6 @@ export const PosTerminal = () => {
             )}
           </div>
 
-          {/* Moneda */}
           <div className="space-y-2">
             <label className="block text-sm font-medium mb-2">Moneda</label>
             <div className="grid grid-cols-3 gap-2">
@@ -297,11 +308,9 @@ export const PosTerminal = () => {
             </div>
           </div>
 
-          {/* Detalles de la tarjeta */}
-          <CardForm onSubmit={handleProcessTransaction} />
+          <CardForm onSubmit={handleSubmit} />
         </div>
 
-        {/* Terminal Footer */}
         <div className="p-4 mt-4 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-black">
           <div className="flex justify-between items-center text-sm text-gray-500 dark:text-gray-400">
             <span>ID Terminal: {configData.codigoPOS}</span>
@@ -310,7 +319,6 @@ export const PosTerminal = () => {
         </div>
       </motion.div>
 
-      {/* Diálogo de Configuración */}
       <Dialog open={configOpen} onOpenChange={setConfigOpen}>
         <DialogContent className="bg-white dark:bg-gray-950 text-gray-900 dark:text-white">
           <DialogHeader>
